@@ -13,7 +13,7 @@ public class Shoot : MonoBehaviour
     {
         _camera = GetComponent<Camera>();
     }
-
+    
     void Update()
     {
         if (Input.GetMouseButtonDown(0))
