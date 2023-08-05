@@ -1,27 +1,56 @@
 using UnityEngine;
-using System.Linq;
 
 public class StickMan : MonoBehaviour
 {
+    private class BoneTransform
+    {
+        public Vector3 Position { get; set; }
+        
+        public Quaternion Rotation { get; set; }
+    }
+    
     private enum StickManState
     {
         Ragdoll,
-        Idle
+        Idle,
+        StandingUp,
+        ResettingBones
     }
 
     [SerializeField] private Camera _camera;
+    [SerializeField] private string _standUpStateName;
+    [SerializeField] private string _standUpClipName;
+    [SerializeField] private float _timeToResetBones;
     
     private Rigidbody[] _ragdolRigidBodies;
     private StickManState _currentState = StickManState.Idle;
     private Animator _animator;
-    private CharacterController _characterController;
+    private float _timeToWakeUp;
+    private Transform _hipsBone;
+
+    private BoneTransform[] _standUpBoneTransforms;
+    private BoneTransform[] _ragdollBoneTransforms;
+    private Transform[] _bones;
+    private float _elapsedResetBonesTime;
     
     void Awake()
     {
         _ragdolRigidBodies = new[] { GetComponentInChildren<Rigidbody>() };
         _animator = GetComponent<Animator>();
-        _characterController = GetComponent<CharacterController>();
+        _hipsBone = _animator.GetBoneTransform(HumanBodyBones.Hips);
 
+        _bones = new [] {_hipsBone.GetComponentInChildren<Transform>()};
+        _ragdollBoneTransforms = new BoneTransform[_bones.Length];
+        _standUpBoneTransforms = new BoneTransform[_bones.Length];
+
+        for (int boneIndex = 0; boneIndex < _bones.Length; boneIndex++)
+        {
+            _ragdollBoneTransforms[boneIndex] = new BoneTransform();
+            _standUpBoneTransforms[boneIndex] = new BoneTransform();
+        }
+        
+        PopulateAnimationStarBoneTransforms(_standUpClipName, _standUpBoneTransforms);
+        
         DisableRagdoll();
     }
 
@@ -35,6 +64,12 @@ public class StickMan : MonoBehaviour
             case StickManState.Ragdoll:
                 RagdollBehaviour();
                 break;
+            case StickManState.StandingUp:
+                StandingUpBehavior();
+                break;
+            case StickManState.ResettingBones:
+                ResettingBonesBehaviour();
+                break;
         }
     }
 
@@ -42,12 +77,31 @@ public class StickMan : MonoBehaviour
     {
         EnableRagdoll();
 
-        Rigidbody hitRigidbody = _ragdolRigidBodies.
-            OrderBy(rigidbody => Vector3.Distance(rigidbody.position, hitPoint)).First();
+        Rigidbody hitRigidbody = FindHitRigidbody(hitPoint);
         
         hitRigidbody.AddForceAtPosition(force,hitPoint,ForceMode.Impulse);
 
         _currentState = StickManState.Ragdoll;
+        _timeToWakeUp = Random.Range(3, 5);
+    }
+
+    private Rigidbody FindHitRigidbody(Vector3 hitPoint)
+    {
+        Rigidbody closestRigidbody = null;
+        float closestDistance = 0;
+
+        foreach (var rigidbody in _ragdolRigidBodies)
+        {
+            float distance = Vector3.Distance(rigidbody.position, hitPoint);
+
+            if (closestRigidbody == null || distance < closestDistance)
+            {
+                closestDistance = distance;
+                closestRigidbody = rigidbody;
+            }
+        }
+
+        return closestRigidbody;
     }
 
     private void DisableRagdoll()
@@ -58,7 +112,6 @@ public class StickMan : MonoBehaviour
         }
         
         _animator.enabled = true;
-        _characterController.enabled = true;
     }
 
     private void EnableRagdoll()
@@ -69,7 +122,6 @@ public class StickMan : MonoBehaviour
         }
 
         _animator.enabled = false;
-        _characterController.enabled = false;
     }
 
     private void IdleBehaviour()
@@ -84,6 +136,114 @@ public class StickMan : MonoBehaviour
 
     private void RagdollBehaviour()
     {
+        _timeToWakeUp -= Time.deltaTime;
+
+        if (_timeToWakeUp <= 0)
+        {
+            AlignRotationToHips();
+            AlignPositionToHips();
+            
+            PopulateBoneTransforms(_ragdollBoneTransforms);
+
+            _currentState = StickManState.ResettingBones;
+            _elapsedResetBonesTime = 0;
+        }
+    }
+
+    private void StandingUpBehavior()
+    {
+        if (_animator.GetCurrentAnimatorStateInfo(0).IsName(_standUpStateName) == false)
+        {
+            _currentState = StickManState.Idle;
+        }
+    }
+
+    private void ResettingBonesBehaviour()
+    {
+        _elapsedResetBonesTime += Time.deltaTime;
+        float elapsedPresentage = _elapsedResetBonesTime / _timeToResetBones;
+
+        for (int boneIndex = 0; boneIndex < _bones.Length; boneIndex++)
+        {
+            _bones[boneIndex].localPosition = Vector3.Lerp(
+                _ragdollBoneTransforms[boneIndex].Position,
+                _standUpBoneTransforms[boneIndex].Position,
+                elapsedPresentage);
+            
+            _bones[boneIndex].localRotation = Quaternion.Lerp(
+                _ragdollBoneTransforms[boneIndex].Rotation,
+                _standUpBoneTransforms[boneIndex].Rotation,
+                elapsedPresentage);
+        }
+
+        if (elapsedPresentage>= 1 )
+        {
+            _currentState = StickManState.StandingUp;
+            DisableRagdoll();
+            
+            _animator.Play(_standUpStateName);
+        }
+    }
+
+    private void AlignRotationToHips()
+    {
+        Vector3 originalHipsPosition = _hipsBone.position;
+        Quaternion originalHipsRotation = _hipsBone.rotation;
+
+        Vector3 desiredDirection = _hipsBone.up * -1;
+        desiredDirection.y = 0;
+        desiredDirection.Normalize();
+
+        Quaternion fromtoRotation = Quaternion.FromToRotation(transform.forward, desiredDirection);
+        transform.rotation *= fromtoRotation;
+
+        _hipsBone.position = originalHipsPosition;
+        _hipsBone.rotation = originalHipsRotation;
+    }
+    
+    private void AlignPositionToHips()
+    {
+        Vector3 originalHipsPosition = _hipsBone.position;
+        transform.position = _hipsBone.position;
+
+        Vector3 positionOffset = _standUpBoneTransforms[0].Position;
+        positionOffset.y = 0;
+        positionOffset = transform.rotation * positionOffset;
+        transform.position -= positionOffset;
+
+        if (Physics.Raycast(transform.position, Vector3.down, out RaycastHit hitInfo))
+        {
+            transform.position = new Vector3(transform.position.x, hitInfo.point.y, transform.position.z);
+        }
+
+        _hipsBone.position = originalHipsPosition;
+    }
+
+    private void PopulateBoneTransforms(BoneTransform[] boneTransforms)
+    {
+        for (int boneIndex = 0; boneIndex < _bones.Length; boneIndex++)
+        {
+            boneTransforms[boneIndex].Position = _bones[boneIndex].localPosition;
+            boneTransforms[boneIndex].Rotation = _bones[boneIndex].localRotation;
+        }
+    }
+
+    private void PopulateAnimationStarBoneTransforms(string clipName, BoneTransform[] boneTransforms)
+    {
+        Vector3 positioBeforeSampling = transform.position;
+        Quaternion rotationBeforeSampling = transform.rotation;
         
+        foreach (var clip in _animator.runtimeAnimatorController.animationClips)
+        {
+            if (clip.name == clipName)
+            {
+                clip.SampleAnimation(gameObject,0);
+                PopulateBoneTransforms(_standUpBoneTransforms);
+                break;
+            }
+        }
+
+        transform.position = positioBeforeSampling;
+        transform.rotation = rotationBeforeSampling;
     }
 }

@@ -45,7 +45,7 @@ public class CubeGenerator : MonoBehaviour
 
     private Vector3 AlignCubeToGround(Vector3 cubePosition)
     {
-        Physics.Raycast(cubePosition, -transform.up, out var hit, 5f);
+        Physics.Raycast(cubePosition, Vector3.down, out var hit, 5f);
 
         var newUp = hit.normal;
 
